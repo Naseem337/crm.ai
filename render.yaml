@@ -1,0 +1,121 @@
+# Render Blueprint: builder (web), realtime (web), worker, Redis (Key Value).
+#
+# NOT included: PostgreSQL and object storage.
+#  - Postgres: migrations need the TimescaleDB + pgvector extensions, which Render's
+#    managed Postgres does not offer. Use Timescale Cloud (Tiger Data) and paste its
+#    connection string into DATABASE_URL.
+#  - Storage: Render has no S3 service. Use Cloudflare R2 or AWS S3 (S3_* vars).
+#
+# Variables marked `sync: false` are prompted for in the Render dashboard on first
+# deploy. See DEPLOY-RENDER.md.
+
+services:
+  - type: keyvalue
+    name: msquare-redis
+    plan: starter
+    ipAllowList: [] # private network only
+    maxmemoryPolicy: noeviction # BullMQ queues must never be evicted
+
+  - type: web
+    name: msquare-builder
+    runtime: docker
+    plan: standard
+    dockerfilePath: ./apps/builder/docker/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: NEXT_PUBLIC_EDITION
+        value: community
+      - key: RUN_DB_MIGRATE
+        value: "true"
+      - key: RUN_DB_SEED
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: msquare-redis
+          property: connectionString
+      - key: BETTER_AUTH_URL
+        sync: false # e.g. https://app.yourdomain.com
+      - key: NEXT_PUBLIC_BUILDER_URL
+        sync: false # same as BETTER_AUTH_URL
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        sync: false # 64 hex chars; generate once, never change
+      - key: REALTIME_BROADCAST_SECRET
+        generateValue: true
+      - key: REALTIME_PROXY_URL
+        fromService:
+          type: web
+          name: msquare-realtime
+          property: hostport
+          # resolved as host:port; builder expects a URL, so set to
+          # http://<value> if Render does not prefix it (see DEPLOY-RENDER.md)
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+  - type: web
+    name: msquare-realtime
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./apps/realtime/docker/Dockerfile
+    dockerContext: .
+    autoDeploy: false
+    envVars:
+      - key: PORT
+        value: "1999"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: msquare-redis
+          property: connectionString
+      - key: REALTIME_BROADCAST_SECRET
+        sync: false # must equal the builder's generated value
+      - key: NEXT_PUBLIC_BUILDER_URL
+        sync: false
+      - key: REALTIME_BUILDER_URL
+        sync: false
+
+  - type: worker
+    name: msquare-worker
+    runtime: docker
+    plan: standard
+    dockerfilePath: ./apps/worker/docker/Dockerfile
+    dockerContext: .
+    autoDeploy: false
+    envVars:
+      - key: NEXT_PUBLIC_EDITION
+        value: community
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: msquare-redis
+          property: connectionString
+      - key: BETTER_AUTH_SECRET
+        sync: false # must equal the builder's value
+      - key: ENCRYPTION_KEY
+        sync: false # must equal the builder's value
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
